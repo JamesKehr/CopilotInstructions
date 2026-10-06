@@ -37,24 +37,16 @@ if ($LASTEXITCODE -ne 0 -or -not $head) {
 $base = $base.Trim()
 $head = $head.Trim()
 
-# gate-runner requires ripgrep (rg). It is NOT in the default GitHub-hosted ubuntu image, so auto-install it ONLY on a
-# Linux CI runner (-CiMode) when absent (the coverage gate forbids a separate apt-get run: step, so setup lives in this
-# mirrored script). This script is also reachable from run-local-ci in local dev; there we never auto-install (no
-# surprise sudo prompt/hang) and fail closed with an install hint rather than run fail-open without the rg-battery.
-if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
-    if ($CiMode -and $env:RUNNER_OS -eq 'Linux') {
-        Write-Host 'run-quality-gate-ci: ripgrep (rg) not found on the CI runner; installing via apt-get...'
-        & sudo apt-get update -qq 2>&1 | Out-Null
-        & sudo apt-get install -y -qq ripgrep 2>&1 | Out-Null
-    }
-    if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
-        Write-WrapErr 'run-quality-gate-ci: ripgrep (rg) is required by gate-runner but is not on PATH (install ripgrep - e.g. apt-get install ripgrep / winget install BurntSushi.ripgrep.MSVC - and retry)'
-        exit 2
-    }
+try {
+    Import-Module (Join-Path $PSScriptRoot 'lib/gate-runner-dependencies.psm1') -Force
+    Initialize-GateRunnerDependencies -CiMode:$CiMode
+    $pwshExe = (Get-Command pwsh -ErrorAction Stop).Source
+} catch {
+    Write-WrapErr "run-quality-gate-ci: $($_.Exception.Message)"
+    exit 2
 }
 
 $env:COPILOT_INSTRUCTIONS_CLONE = $RepoRoot
 $runner = Join-Path $RepoRoot '.github/pr-quality-gate/gate-runner.ps1'
-$pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
 & $pwshExe -NoProfile -File $runner -BaseSha $base -HeadSha $head -Mode full -Verify -ProjectRoot $RepoRoot
 exit $LASTEXITCODE
