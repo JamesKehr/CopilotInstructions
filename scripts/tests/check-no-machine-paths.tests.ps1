@@ -138,6 +138,31 @@ Assert-Equal 2 (Invoke-Gate -Repo $modeRepo) 'no mode (-Staged/-BaseRef absent) 
 Assert-Equal 2 (Invoke-Gate -Repo $modeRepo -Staged -BaseRef 'main') 'both -Staged and -BaseRef -> exit 2'
 Assert-Equal 2 (Invoke-Gate -Repo $modeRepo -BaseRef 'no-such-ref-xyz') 'unresolvable -BaseRef ref -> exit 2 (fail-closed)'
 
+
+$isolationRepo = New-TestGitRepository -Prefix 'repo-isolation'
+New-TestCommit -Directory $isolationRepo -File 'README.md' -Content 'seed' -Message 'seed' | Out-Null
+$fixtureHost = 'https://GITHUB.COM/'
+foreach ($slug in @('example/consumer','jschick04/CopilotInstructionsOther','jschick04/CopilotInstructionsOther.git/tree/main','other/CopilotInstructions')) {
+    $url = $fixtureHost + $slug
+    Add-RepoFile -Repo $isolationRepo -File 'link.txt' -Content $url
+    Assert-Equal 1 (Invoke-Gate -Repo $isolationRepo -Staged) "repository isolation rejects $url"
+}
+foreach ($url in @('https://github.com/jschick04/CopilotInstructions','https://GITHUB.COM/JSCHICK04/COPILOTINSTRUCTIONS.git','https://github.com/jschick04/CopilotInstructions/tree/main','https://github.com/jschick04/CopilotInstructions.git/')) {
+    Add-RepoFile -Repo $isolationRepo -File 'link.txt' -Content $url
+    Assert-Equal 0 (Invoke-Gate -Repo $isolationRepo -Staged) "repository isolation exempts exact identity $url"
+}
+
+$foreignLine = $fixtureHost + 'example/consumer'
+Add-RepoFile -Repo $isolationRepo -File 'link.txt' -Content $foreignLine
+$lineBytes = [Text.Encoding]::UTF8.GetBytes($foreignLine)
+$lineHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($lineBytes)).ToLowerInvariant()
+$allowlist = Join-Path $isolationRepo '.github/pr-quality-gate/data/no-repo-slugs-allowlist.txt'
+New-Item -ItemType Directory -Path (Split-Path $allowlist) -Force | Out-Null
+Set-Content -LiteralPath $allowlist -Value @()
+& git -C $isolationRepo add .github/pr-quality-gate/data/no-repo-slugs-allowlist.txt 2>$null
+Set-Content -LiteralPath $allowlist -Value $lineHash
+Assert-Equal 1 (Invoke-Gate -Repo $isolationRepo -Staged) 'unstaged exemption cannot authorize staged foreign repository reference'
+
 Remove-TestTempDirectories
 Write-Host ''
 Write-Host "check-no-machine-paths.tests: $script:Pass passed, $script:Fail failed."

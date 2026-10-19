@@ -19,6 +19,7 @@ function New-TempRepo {
         New-Item -ItemType Directory -Path (Join-Path $dir 'scripts') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $dir 'scripts/check-post-code-change.ps1') -Value 'x' -NoNewline
         New-Item -ItemType Directory -Path (Join-Path $dir '.github/pr-quality-gate/audits') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir '.github/pr-quality-gate/panel-policy.md') -Value 'fixture policy'
     }
     return $dir
 }
@@ -94,6 +95,9 @@ try {
     Assert-True (-not (Read-ReadsNoteValidated -RepoRoot $r -CommitSha $rc).Valid) 'reads note missing parent_sha -> invalid (fail-closed)'
     Write-AuditNote -RepoRoot $r -NoteRef (Get-ReadsNoteRef) -CommitSha $rc -BodyLines (New-ReadsBody ($rcParent.Substring(0, 7)))
     Assert-True (-not (Read-ReadsNoteValidated -RepoRoot $r -CommitSha $rc).Valid) 'reads note with a 7-char prefix parent_sha -> invalid (full 40-char required; parity with panel/comment)'
+    Write-AuditNote -RepoRoot $r -NoteRef (Get-ReadsNoteRef) -CommitSha $rc -BodyLines (New-ReadsBody ('f' * 64))
+    $reads256 = Read-ReadsNoteValidated -RepoRoot $r -CommitSha $rc
+    Assert-True (-not $reads256.Valid -and (@($reads256.Errors) -match 'does not match the commit parent')) '64-hex reads parent_sha passes the shape check (rejected only as stale)'
 
     Write-Host "`n=== freshness: stale tree (direct + real rewriteRef amend-carry) ==="
     # direct: a note whose audited_tree points at a different commit's tree
@@ -109,6 +113,9 @@ try {
     $prefixNote = @("audited_tree: $($treeD0.Substring(0,12))", 'parent_sha: x', 'commit_subject: y')
     $freshPrefix = Test-AuditNoteFreshness -NoteLines $prefixNote -RepoRoot $rd -CommitSha $d0
     Assert-True (-not $freshPrefix.Fresh) 'note with a 12-char prefix of the real audited_tree -> NOT fresh (no prefix match)'
+    $sha256TreeNote = @("audited_tree: $('e' * 64)", 'parent_sha: x', 'commit_subject: y')
+    $fresh256 = Test-AuditNoteFreshness -NoteLines $sha256TreeNote -RepoRoot $rd -CommitSha $d0
+    Assert-True (-not $fresh256.Fresh -and -not (@($fresh256.Errors) -match 'must be a full')) '64-hex audited_tree passes the shape check (stale only by mismatch)'
 
     # real path: notes.rewriteRef copies the note across commit --amend; the carried note is stale
     $ra = New-TempRepo
@@ -151,7 +158,7 @@ try {
     Assert-True ([bool](@($commentB1) | Where-Object { $_ -cmatch 'Comment audit:' })) 'comment note body intact'
     Assert-True (-not (Test-AuditNoteFreshness -NoteLines $commentB1 -RepoRoot $r2 -CommitSha $b1).Fresh) 'carried comment note is STALE (whole-tree freshness; agent re-authors both receipts on amend)'
 
-    Write-Host "`n=== Get-NormalizedRemoteIdentity + Test-IsInstructionsRepo ==="
+    Write-Host "`n=== Get-NormalizedRemoteIdentity + Test-RequiresFullPanel ==="
     Assert-Equal 'github.com/jschick04/copilotinstructions' (Get-NormalizedRemoteIdentity 'https://github.com/jschick04/CopilotInstructions.git') 'https url normalized' -CaseSensitive
     Assert-Equal 'github.com/jschick04/copilotinstructions' (Get-NormalizedRemoteIdentity 'git@github.com:jschick04/CopilotInstructions.git') 'scp-style url normalized' -CaseSensitive
     Assert-Equal 'github.com/jschick04/copilotinstructions' (Get-NormalizedRemoteIdentity 'ssh://git@github.com/jschick04/CopilotInstructions') 'ssh url (no .git) normalized' -CaseSensitive
@@ -159,18 +166,17 @@ try {
 
     $idRepo = New-TempRepo -WithIdentity
     [void](New-TestCommit -Directory $idRepo -File 'seed.txt' -Content 's' -Message 'seed')
-    Assert-True (Test-IsInstructionsRepo -RepoRoot $idRepo) 'identity repo (jschick04 remote + sentinels) -> true'
+    Assert-True (Test-RequiresFullPanel -RepoRoot $idRepo) 'identity repo (jschick04 remote + sentinels) -> true'
     $foreign = New-TempRepo
     [void](New-TestCommit -Directory $foreign -File 'seed.txt' -Content 's' -Message 'seed')
-    Assert-True (-not (Test-IsInstructionsRepo -RepoRoot $foreign)) 'repo without the identity remote -> false'
+    Assert-True (-not (Test-RequiresFullPanel -RepoRoot $foreign)) 'repo without the identity remote -> false'
     git -C $idRepo remote set-url origin 'https://github.com/someone/Else.git'
-    Assert-True (-not (Test-IsInstructionsRepo -RepoRoot $idRepo)) 'identity repo with a foreign remote URL -> false (vendoring leak closed)'
-    # origin-scoped gate scenario: a consumer that vendors the sentinels + adds THIS repo
-    # as an extra remote (e.g. upstream) but keeps its OWN origin must NOT trip the gate.
+    Assert-True (Test-RequiresFullPanel -RepoRoot $idRepo) 'object activation survives fork remote URL'
     $consumer = New-TempRepo -WithIdentity
     git -C $consumer remote set-url origin 'https://github.com/acme/their-app.git'
     git -C $consumer remote add upstream 'https://github.com/jschick04/CopilotInstructions.git'
-    Assert-True (-not (Test-IsInstructionsRepo -RepoRoot $consumer)) 'consumer with origin=their-repo + upstream=this-repo -> false (origin-scoped; no all-remote false-positive)'
+    [void](New-TestCommit -Directory $consumer -File 'seed.txt' -Content 'seed' -Message 'activate')
+    Assert-True (Test-RequiresFullPanel -RepoRoot $consumer) 'committed activation does not depend on origin identity'
 
     Write-Host "`n=== flush-audits.ps1 end-to-end (identity repo) + identity no-op ==="
     $fr = New-TempRepo -WithIdentity
@@ -204,6 +210,14 @@ try {
     & (Join-Path $repoRoot 'scripts/flush-audits.ps1') -RepoRoot $nr -CommitSha HEAD -Quiet
     Assert-True ($null -eq (Read-RawAuditNote -RepoRoot $nr -NoteRef (Get-PanelNoteRef) -CommitSha $nc)) 'no-identity repo: flush wrote NO note'
     Assert-True (Test-Path (Join-Path $nr '.github/pr-quality-gate/audits/post-code-change-last.md')) 'no-identity repo: receipt left untouched'
+
+    foreach ($remoteForm in @('https://github.example/fork/instructions.git','git@instructions-alias:owner/repository.git','none')) {
+        if ($remoteForm -eq 'none') { & git -C $fr remote remove origin }
+        else { & git -C $fr remote set-url origin $remoteForm }
+        Set-Content -LiteralPath (Join-Path $fr '.github/pr-quality-gate/audits/post-code-change-last.md') -Value (New-PanelBody $fp)
+        & pwsh -NoProfile -File (Join-Path $repoRoot 'scripts/flush-audits.ps1') -RepoRoot $fr -CommitSha $fc 2>&1 | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $fr '.github/pr-quality-gate/audits/post-code-change-last.md'))) "note writer activates on git objects for remote form $remoteForm"
+    }
 
     Write-Host "`n=== idempotent re-flush (audited_tree not doubled) ==="
     $ir = New-TempRepo
