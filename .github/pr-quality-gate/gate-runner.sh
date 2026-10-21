@@ -195,7 +195,7 @@ run_rg() {  # args: pattern, globs-json-array, file-list-or-empty (newline-separ
         local matched=()
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            [[ ! -e "$PROJECT_ROOT/$f" ]] && continue   # skip deleted files
+            [[ ! -e "$PROJECT_ROOT/$f" ]] && continue
             for g in $globs; do
                 case "$f" in $g) matched+=("$PROJECT_ROOT/$f"); break ;; esac
                 case "$f" in **/$g) matched+=("$PROJECT_ROOT/$f"); break ;; esac
@@ -313,7 +313,6 @@ QUALITY GATE
   pr_ref: $(yaml_sq "$PR_REF")
 EOF
 
-# Build required_rule_ack list (review-pass-only HIGH-tier slugs filtered by mode)
 case "$MODE" in
     full)      ALLOWED_TIERS='HIGH MEDIUM LOW' ;;
     triage)    ALLOWED_TIERS='HIGH MEDIUM' ;;

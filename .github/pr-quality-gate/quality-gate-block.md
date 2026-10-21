@@ -23,7 +23,7 @@ QUALITY GATE
   head_sha: <40-char SHA of current HEAD>
   diff_scope: <N files, +<X>/-<Y> lines>
   patterns_run: <N>                            # 0 mechanically signals empty-battery
-  required_rule_ack: [<HIGH-tier review-pass-only slugs that require acknowledgement>]   # gate-runner emits the LIST (mechanical); the per-slug ack (core_rules_acknowledged) is agent-asserted
+  required_rule_ack: [<mode-filtered review-pass-only slugs: full HIGH+MEDIUM+LOW; triage HIGH+MEDIUM; lint-only HIGH>]
   rg_flagged_sites:                            # present ONLY when rg matched sites
     <slug>: [<file:line>, ...]
   findings:
