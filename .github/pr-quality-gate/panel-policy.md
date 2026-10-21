@@ -1,6 +1,6 @@
 # PR Quality Gate - Panel Policy
 
-Multi-reviewer panel governance for `full` and `triage` modes. The orchestrator reads this before invoking `invoke-panel.ps1`; the script stays a thin launcher so policy is reviewable + amendable independently.
+Multi-reviewer panel governance for `full`, `lite`, and `triage` modes. The orchestrator reads this before invoking `invoke-panel.ps1`; the script stays a thin launcher so policy is reviewable + amendable independently.
 
 ## When the panel runs (timing requirement - MANDATORY)
 
@@ -163,7 +163,7 @@ This prevents certifying a diff amended/rebased mid-review.
 
 ## Review-pass-only pattern forwarding (Slot 1 NB-2)
 
-For every catalog entry with `scope_mode: review-pass-only`, `invoke-panel.ps1` extracts the entry's `review_pass_only_prompt` text and appends it to the system prompt of EACH reviewer in the slate (full + triage modes). The reviewers see:
+For `full`, `lite`, and `triage`, `invoke-panel.ps1` forwards each mode-selected `review_pass_only_prompt` to EVERY reviewer (tier filter below). The reviewers see:
 > ## Review-pass-only patterns to verify
 > (one bulleted item per catalog `review_pass_only_prompt`)
 
@@ -173,7 +173,7 @@ Without this, the highest-frequency pattern in the seed corpus (`doc-impl-mismat
 
 ## Per-rule acknowledgement (rule-coverage gate)
 
-Every panel verdict AND every pre-commit gate MUST emit a `core_rules_acknowledged` block enumerating every HIGH-tier review-pass-only catalog slug with an explicit disposition. This is the rule-coverage forcing function: without per-site evidence, an `applied` status is not falsifiable.
+Every panel verdict MUST disposition each mode-selected `required_rule_ack` slug; every pre-commit gate MUST cover every HIGH-tier review-pass-only slug in `HIGH-TIER-SLUGS.md`. `core_rules_acknowledged` carries per-site evidence so `applied` is falsifiable.
 
 **Process rules** (slugs that check a process artifact rather than code - currently `implementation-to-commit-transition-bypasses-user-approval`, `full-scan-against-new-rule-not-triggered-after-bot-finding`, `least-privilege-audit-required-on-visibility-delta`, `intent-driven-testing-required-on-test-or-SUT-delta`): reviewer verifies the artifact (PRE-GIT SENTINEL block, POST-CODE-CHANGE LEDGER field, `full_scan_results` field) in the agent's text output earlier in the conversation. The `evidence.per_site_citations` for a process rule points at the ledger / sentinel block citation rather than a source-file location.
 
@@ -248,9 +248,9 @@ Without `fix_evidence`, the verdict is treated as NEEDS_REWORK (textual ack alon
 
 ## Machinery-side preamble emission (compaction-safe)
 
-`gate-runner.ps1` + `gate-runner.sh` + `invoke-panel.ps1` ALL print these blocks at the top of their stdout on every invocation:
+Gate runners emit the mode-filtered roster every run; `invoke-panel.ps1` emits it for `full`/`lite`/`triage`. Other preambles are conditional:
 
-1. **HIGH-tier slug list**: `required_rule_ack: [<slug>, ...]` from current `pattern-catalog.md` HIGH-tier rows (via `HIGH-TIER-SLUGS.md` derived index)
+1. **Mode-filtered `required_rule_ack`**: review-pass-only slugs by tier: `full`/`lite` HIGH+MEDIUM+LOW, `triage` HIGH+MEDIUM, `lint-only` HIGH (runner only). `HIGH-TIER-SLUGS.md` remains the separate per-commit HIGH floor.
 2. **rg-battery flagged sites** (gate-runner only): `rg_flagged_sites: { <slug>: [{file, line}, ...] }` per slug from this run
 3. **Anti-recidivism preamble** (when `-PrRef` supplied): listed slugs the agent / panel must clear
 
@@ -273,7 +273,7 @@ panel:
   fix_iteration_count: <int>
   must_fix_unresolved: <int>
   core_rules_acknowledged: <see §Per-rule acknowledgement>
-  rule_coverage_passed: <bool>              # true if all HIGH-tier review-pass-only slugs dispositioned
+  rule_coverage_passed: <bool>
   anti_recidivism_acknowledged: <list>      # verified-no-recurrence entries; empty if no PrRef
 ```
 

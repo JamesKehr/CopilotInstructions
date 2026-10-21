@@ -88,6 +88,14 @@ jobs:
       - shell: pwsh
         run: ./scripts/tests/check-catalog-fp-refs.tests.ps1
 
+  gate-runner-semantic-candidates-tests:
+    name: gate-runner semantic candidate regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - shell: pwsh
+        run: ./scripts/tests/gate-runner-semantic-candidates.tests.ps1 -CiMode
+
   script-tests:
     name: comment-audit module unit tests
     runs-on: ubuntu-latest
