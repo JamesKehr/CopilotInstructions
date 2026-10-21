@@ -12,6 +12,8 @@ $script:Fail = 0
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $savedClone = $env:COPILOT_INSTRUCTIONS_CLONE
+$savedGitShimExecutable = $env:GATE_RUNNER_TEST_GIT_EXE
+$savedGitShimArgument = $env:GATE_RUNNER_TEST_GIT_ARG
 
 try {
     Initialize-GateRunnerDependencies -CiMode:$CiMode
@@ -32,8 +34,21 @@ try {
     $gitPath = (Get-Command git -ErrorAction Stop).Source
     $rgPath = (Get-Command rg -ErrorAction Stop).Source
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-        [IO.File]::WriteAllText((Join-Path $missingPwshProbeRoot 'git.cmd'), "@echo off`r`n`"$gitPath`" %*`r`nexit /b %ERRORLEVEL%`r`n", [Text.ASCIIEncoding]::new())
+        $env:GATE_RUNNER_TEST_GIT_EXE = $gitPath
+        [IO.File]::WriteAllText((Join-Path $missingPwshProbeRoot 'git.cmd'), "@echo off`r`n`"%GATE_RUNNER_TEST_GIT_EXE%`" %*`r`nexit /b %ERRORLEVEL%`r`n", [Text.ASCIIEncoding]::new())
         [IO.File]::WriteAllText((Join-Path $missingPwshProbeRoot 'rg.cmd'), "@echo off`r`n`"$rgPath`" %*`r`nexit /b %ERRORLEVEL%`r`n", [Text.ASCIIEncoding]::new())
+        $syntheticGitRoot = New-TestTempDirectory -Prefix ('non-ascii-percent-git-' + [char]0xE9 + '-%PATH%')
+        $syntheticGitPath = Join-Path $syntheticGitRoot 'git.cmd'
+        [IO.File]::WriteAllText($syntheticGitPath, "@echo off`r`necho unicode-percent-git-path-preserved %~1`r`nexit /b 17`r`n", [Text.ASCIIEncoding]::new())
+        $env:GATE_RUNNER_TEST_GIT_EXE = $syntheticGitPath
+        $env:GATE_RUNNER_TEST_GIT_ARG = 'literal-%PATH%-argument'
+        $syntheticGitOutput = @(& (Join-Path $missingPwshProbeRoot 'git.cmd') '%GATE_RUNNER_TEST_GIT_ARG%' 2>&1)
+        $syntheticGitExit = $LASTEXITCODE
+        Assert-True ($syntheticGitPath.Contains([string]([char]0xE9))) 'synthetic Git executable path contains a non-ASCII character'
+        Assert-True ($syntheticGitPath.Contains('%PATH%')) 'synthetic Git executable path contains a literal percent token'
+        Assert-Equal 17 $syntheticGitExit 'ASCII shim propagates the synthetic Git exit code'
+        Assert-Equal 'unicode-percent-git-path-preserved literal-%PATH%-argument' (($syntheticGitOutput -join "`n").Trim()) 'ASCII shim preserves non-ASCII path and literal percent tokens in path and arguments' -CaseSensitive
+        $env:GATE_RUNNER_TEST_GIT_EXE = $gitPath
     } else {
         [IO.File]::WriteAllText((Join-Path $missingPwshProbeRoot 'git'), "#!/bin/sh`n" + ('exec "{0}" "$@"' -f ($gitPath -replace '"','\"')) + "`n", [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText((Join-Path $missingPwshProbeRoot 'rg'), "#!/bin/sh`n" + ('exec "{0}" "$@"' -f ($rgPath -replace '"','\"')) + "`n", [Text.UTF8Encoding]::new($false))
@@ -438,6 +453,8 @@ def read_positions(values, position):
     Assert-Equal $findingsBefore (Get-FileHash -LiteralPath $findingsPath -Algorithm SHA256).Hash '-Verify leaves findings.csv unchanged'
 } finally {
     $env:COPILOT_INSTRUCTIONS_CLONE = $savedClone
+    $env:GATE_RUNNER_TEST_GIT_EXE = $savedGitShimExecutable
+    $env:GATE_RUNNER_TEST_GIT_ARG = $savedGitShimArgument
     Remove-TestTempDirectories
 }
 
